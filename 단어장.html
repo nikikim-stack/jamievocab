@@ -1,0 +1,591 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="단어장"/>
+<title>나의 단어장</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+KR:wght@400;600;700&family=Noto+Sans+KR:wght@400;500;600&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;font-family:'Noto Sans KR',sans-serif;background:#F7F3EB;-webkit-font-smoothing:antialiased}
+@keyframes fadeUp{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes pop{0%{transform:scale(.93)}60%{transform:scale(1.06)}100%{transform:scale(1)}}
+@keyframes shim{0%,100%{opacity:.35}50%{opacity:.8}}
+.fu{animation:fadeUp .3s ease both}
+.fi{animation:fadeIn .2s ease both}
+.sp{animation:spin .7s linear infinite;display:inline-block}
+.pop{animation:pop .3s ease both}
+.sk{animation:shim 1.3s ease-in-out infinite;background:#E4DDD1;border-radius:6px}
+input,button,textarea{font-family:'Noto Sans KR',sans-serif;-webkit-appearance:none;outline:none;box-sizing:border-box}
+.inp{width:100%;padding:13px 15px;border:2px solid #E4DDD1;border-radius:12px;font-size:16px;background:#FAFAF6;color:#1B2B2A;transition:border-color .2s}
+.inp:focus{border-color:#2A7464}
+.inp::placeholder{color:#AABCBC}
+.btn{display:inline-block;padding:13px 20px;background:#2A7464;color:white;border:none;border-radius:12px;cursor:pointer;font-weight:600;font-size:15px;transition:opacity .15s,transform .1s}
+.btn:active{opacity:.8;transform:scale(.97)}
+.btn:disabled{background:#AABCBC;cursor:not-allowed}
+.tbtn{padding:10px 0;border:none;cursor:pointer;border-radius:8px 8px 0 0;font-size:13px;flex:1;transition:all .18s}
+.chip{padding:5px 13px;border-radius:18px;border:none;cursor:pointer;font-size:13px;font-family:'Noto Serif KR',serif;font-weight:600}
+.qopt{padding:16px 8px;border:2px solid #E4DDD1;border-radius:12px;cursor:pointer;font-size:14px;font-family:'Noto Serif KR',serif;font-weight:600;text-align:center;background:white;color:#1B2B2A;width:100%;transition:all .18s}
+.qopt:active{transform:scale(.97)}
+.qopt.ok{background:#D7FAE8;border-color:#2D7A50;color:#2D7A50}
+.qopt.ng{background:#FEE2E2;border-color:#BF3B3B;color:#BF3B3B}
+.qopt.off{cursor:default}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState, useEffect, useRef} = React;
+
+/* storage */
+const LS = {
+  get:(k,d=null)=>{try{const v=localStorage.getItem(k);return v!==null?JSON.parse(v):d}catch{return d}},
+  set:(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch{}}
+};
+const ARCH = "wb_arch";
+const KKEY = "wb_key";
+
+/* utils */
+const toDay   = () => new Date().toISOString().slice(0,10);
+const fmtFull = d => { const[y,m,dy]=d.split("-"); return `${y}년 ${+m}월 ${+dy}일`; };
+const fmtShort= d => { const[,m,dy]=d.split("-"); return `${+m}월 ${+dy}일`; };
+
+/* Groq API */
+async function lookup(word, key) {
+  const prompt = `한글 단어 "${word}"의 한자·영어 정보를 JSON으로만 반환. 마크다운 없이 순수 JSON만. 초등 6학년 수준.
+형식(예시):
+{"word":"민주주의","hanja":{"hasHanja":true,"characters":"民主主義","reading":"민주주의","meaning":"백성이 주인인 정치 체제","components":[{"char":"民","reading":"민","radical":"氏","radicalName":"각시씨","charMeaning":"백성","explanation":"氏 부수는 씨족이나 집단을 나타내요. 民은 눈을 찌르는 모습에서 유래했으며 일반 백성을 뜻해요."}]},"english":{"word":"democracy","pronunciation":"데모크러시","partOfSpeech":"명사","definition":"국민이 권력을 갖고 직접 또는 대표를 통해 행사하는 정치 체제","synonyms":["republic","self-governance"],"antonyms":["dictatorship","autocracy"],"relatedWords":[{"word":"democratic","meaning":"민주적인"},{"word":"vote","meaning":"투표"}],"exampleSentence":"Democracy gives every citizen the right to vote.","exampleTranslation":"민주주의는 모든 시민에게 투표권을 줍니다."}}
+hasHanja false면 hanja의 나머지 값은 null.`;
+
+  const r = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+    method:"POST",
+    headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
+    body:JSON.stringify({model:"llama-3.3-70b-versatile",messages:[{role:"user",content:prompt}],temperature:0.1})
+  });
+  if(!r.ok){
+    const e=await r.json().catch(()=>({}));
+    const m=e?.error?.message||`오류 ${r.status}`;
+    if(r.status===401)throw new Error("API 키가 올바르지 않아요.");
+    if(r.status===429)throw new Error("잠시 후 다시 시도해주세요.");
+    throw new Error(m);
+  }
+  const d=await r.json();
+  const t=d?.choices?.[0]?.message?.content||"";
+  return JSON.parse(t.replace(/```json\n?|```/g,"").trim());
+}
+
+/* quiz */
+function buildQuiz(words, type) {
+  const pool = type==="hanja"
+    ? words.filter(w=>w.hanja?.hasHanja&&w.hanja?.characters)
+    : words.filter(w=>w.english?.word);
+  if(pool.length<4) return [];
+  const ga = w => type==="hanja"?w.hanja.characters:w.english.word;
+  return [...pool].sort(()=>Math.random()-.5).slice(0,10).map(w=>{
+    const correct=ga(w);
+    const opts=pool.filter(v=>ga(v)!==correct).sort(()=>Math.random()-.5).slice(0,3).map(ga);
+    if(opts.length<3)return null;
+    return{q:type==="hanja"?`"${w.word}"의 한자는?`:`"${w.word}"의 영어는?`,
+      options:[correct,...opts].sort(()=>Math.random()-.5),correct,type};
+  }).filter(Boolean);
+}
+
+/* ── SETUP ── */
+function Setup({onSave}) {
+  const [key,setKey]=useState("");
+  const [err,setErr]=useState("");
+  const [busy,setBusy]=useState(false);
+
+  async function go() {
+    const k=key.trim();
+    if(!k){setErr("키를 입력해주세요.");return;}
+    setBusy(true);setErr("");
+    try{
+      await lookup("행복",k);
+      LS.set(KKEY,k);
+      onSave(k);
+    }catch(e){setErr("실패: "+e.message);}
+    finally{setBusy(false);}
+  }
+
+  return (
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",padding:"20px",background:"#F7F3EB"}}>
+      <div style={{width:"100%",maxWidth:360,background:"white",borderRadius:20,padding:"28px 20px",boxShadow:"0 4px 24px rgba(0,0,0,.10)",border:"1px solid #E4DDD1"}}>
+
+        <div style={{textAlign:"center",marginBottom:20}}>
+          <div style={{fontSize:44,marginBottom:8}}>📖</div>
+          <h1 style={{fontSize:20,color:"#1B2B2A",marginBottom:6,fontWeight:600}}>나의 단어장</h1>
+          <p style={{color:"#7A9090",fontSize:13,lineHeight:1.7}}>처음 한 번만 키를 입력하면<br/>이후엔 바로 시작해요!</p>
+        </div>
+
+        {/* 안내박스 */}
+        <div style={{background:"#E8F4F1",borderRadius:12,padding:"14px 16px",marginBottom:16,border:"1px solid #C4E2DC"}}>
+          <p style={{fontSize:13,fontWeight:600,color:"#1D5449",marginBottom:10}}>🔑 무료 API 키 받는 방법</p>
+          <div style={{fontSize:12,color:"#2A7464",lineHeight:2.3}}>
+            <div>① <a href="https://console.groq.com/keys" target="_blank"
+              style={{color:"#1D5449",fontWeight:700,textDecoration:"underline"}}>console.groq.com/keys</a> 접속</div>
+            <div>② 구글 계정으로 로그인</div>
+            <div>③ "Create API Key" 클릭</div>
+            <div>④ 키 복사 후 아래에 붙여넣기 👇</div>
+          </div>
+          <div style={{marginTop:8,background:"white",borderRadius:8,padding:"6px 10px",border:"1px solid #C4E2DC"}}>
+            <span style={{fontSize:11,color:"#086050",fontWeight:500}}>✅ 완전 무료 &nbsp;·&nbsp; 하루 14,400번 &nbsp;·&nbsp; 카드 불필요</span>
+          </div>
+        </div>
+
+        <input className="inp" value={key} onChange={e=>setKey(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&go()}
+          placeholder="gsk_로 시작하는 키 붙여넣기"
+          style={{marginBottom:err?8:12,fontSize:13}}/>
+
+        {err&&<p style={{fontSize:12,color:"#BF3B3B",marginBottom:10,lineHeight:1.6}}>⚠️ {err}</p>}
+
+        <button className="btn" onClick={go} disabled={busy||!key.trim()} style={{width:"100%",padding:"14px",fontSize:15,borderRadius:12}}>
+          {busy?<span className="sp">⟳</span>:"시작하기 →"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ── MAIN ── */
+function App() {
+  const [apiKey,setApiKey] = useState(()=>LS.get(KKEY,""));
+  const [tab,setTab]       = useState("today");
+  const [input,setInput]   = useState("");
+  const [busy,setBusy]     = useState(false);
+  const [current,setCur]   = useState(null);
+  const [archive,setArch]  = useState(()=>LS.get(ARCH,{}));
+  const [todayList,setTL]  = useState([]);
+  const [selDate,setSD]    = useState(null);
+  const [err,setErr]       = useState("");
+  const [cfg,setCfg]       = useState(false);
+  const inputRef = useRef(null);
+
+  const [qType,setQT]    = useState("both");
+  const [qOn,setQOn]     = useState(false);
+  const [quiz,setQuiz]   = useState([]);
+  const [qIdx,setQIdx]   = useState(0);
+  const [ans,setAns]     = useState([]);
+  const [selAns,setSA]   = useState(null);
+  const [qDone,setQD]    = useState(false);
+
+  useEffect(()=>{
+    const t=toDay(), list=archive[t]||[];
+    if(list.length){setTL(list);setCur(list[list.length-1]);}
+  },[]);
+
+  if(!apiKey) return <Setup onSave={k=>setApiKey(k)}/>;
+
+  async function doSearch() {
+    const w=input.trim();
+    if(!w||busy)return;
+    setBusy(true);setErr("");
+    try{
+      const data=await lookup(w,apiKey);
+      const t=toDay(), prev=archive[t]||[];
+      const idx=prev.findIndex(x=>x.word===data.word);
+      const next=idx>=0?prev.map((x,i)=>i===idx?data:x):[...prev,data];
+      const na={...archive,[t]:next};
+      LS.set(ARCH,na);setArch(na);setTL(next);setCur(data);setInput("");
+      inputRef.current?.focus();
+    }catch(e){setErr(e.message);}
+    finally{setBusy(false);}
+  }
+
+  function goTab(id){
+    setTab(id);setErr("");setCfg(false);
+    if(id==="archive"&&!selDate){
+      const ds=Object.keys(archive).sort((a,b)=>b.localeCompare(a));
+      if(ds.length)setSD(ds[0]);
+    }
+    if(id==="quiz")setQOn(false);
+  }
+
+  function startQuiz(){
+    const all=Object.values(archive).flat();
+    if(all.length<4){setErr("퀴즈를 위해 최소 4개 단어가 필요해요!");return;}
+    let qs=[];
+    if(qType==="hanja"||qType==="both") qs.push(...buildQuiz(all,"hanja"));
+    if(qType==="english"||qType==="both") qs.push(...buildQuiz(all,"english"));
+    qs=qs.sort(()=>Math.random()-.5).slice(0,10);
+    if(!qs.length){setErr("단어가 부족해요.");return;}
+    setQuiz(qs);setQIdx(0);setAns([]);setSA(null);setQD(false);setQOn(true);setErr("");
+  }
+
+  function answerQ(opt){
+    if(selAns!==null)return;
+    setSA(opt);
+    const ok=opt===quiz[qIdx].correct;
+    const na=[...ans,{opt,ok}];
+    setAns(na);
+    setTimeout(()=>{
+      if(qIdx+1>=quiz.length)setQD(true);
+      else{setQIdx(i=>i+1);setSA(null);}
+    },1100);
+  }
+
+  const dates    = Object.keys(archive).sort((a,b)=>b.localeCompare(a));
+  const allCount = Object.values(archive).flat().length;
+  const score    = ans.filter(a=>a.ok).length;
+
+  return (
+    <div style={{background:"#F7F3EB",minHeight:"100vh"}}>
+
+      {/* HEADER */}
+      <div style={{background:"#162322",color:"white",position:"sticky",top:0,zIndex:100,boxShadow:"0 3px 16px rgba(0,0,0,.25)"}}>
+        <div style={{padding:"14px 16px 0"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+            <span style={{fontSize:22}}>📖</span>
+            <div>
+              <div style={{fontSize:17,fontWeight:600,letterSpacing:"-.3px"}}>나의 단어장</div>
+              <div style={{fontSize:10,color:"rgba(255,255,255,.4)"}}>한자 · 영어 · 퀴즈</div>
+            </div>
+            <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:9,color:"rgba(255,255,255,.4)"}}>누적 단어</div>
+                <div style={{fontSize:20,fontWeight:700}}>{allCount}</div>
+              </div>
+              <button onClick={()=>setCfg(s=>!s)}
+                style={{background:"none",border:"1px solid rgba(255,255,255,.25)",borderRadius:8,padding:"6px 9px",color:"rgba(255,255,255,.7)",fontSize:13,cursor:"pointer"}}>
+                ⚙️
+              </button>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:1}}>
+            {[["today","✏️ 오늘"],["archive","📚 모아보기"],["quiz","🎯 퀴즈"]].map(([id,lbl])=>(
+              <button key={id} className="tbtn" onClick={()=>goTab(id)}
+                style={{background:tab===id?"#F7F3EB":"transparent",color:tab===id?"#1B2B2A":"rgba(255,255,255,.6)",fontWeight:tab===id?600:400}}>
+                {lbl}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* SETTINGS */}
+      {cfg&&(
+        <div className="fi" style={{background:"#1A2F2E",padding:"12px 16px",borderBottom:"1px solid rgba(255,255,255,.07)"}}>
+          <p style={{fontSize:11,color:"rgba(255,255,255,.4)",marginBottom:7}}>Groq API 키 변경</p>
+          <div style={{display:"flex",gap:8}}>
+            <input className="inp" id="cfgk" defaultValue={apiKey}
+              style={{flex:1,fontSize:12,background:"rgba(255,255,255,.08)",border:"1px solid rgba(255,255,255,.18)",color:"white"}}
+              placeholder="gsk_..."/>
+            <button className="btn" style={{padding:"10px 14px",fontSize:13}}
+              onClick={()=>{const v=document.getElementById("cfgk").value.trim();if(v){LS.set(KKEY,v);setApiKey(v);setCfg(false);}}}>저장</button>
+          </div>
+        </div>
+      )}
+
+      {/* BODY */}
+      <div style={{padding:"16px 14px 80px"}}>
+
+        {err&&(
+          <div style={{background:"#FEF0F0",border:"1px solid rgba(191,59,59,.3)",borderRadius:10,padding:"10px 14px",color:"#BF3B3B",fontSize:13,marginBottom:14,lineHeight:1.6}}>
+            ⚠️ {err}
+          </div>
+        )}
+
+        {/* TODAY */}
+        {tab==="today"&&(
+          <div className="fu">
+            <div style={{background:"white",borderRadius:14,padding:16,boxShadow:"0 2px 12px rgba(0,0,0,.06)",marginBottom:14,border:"1px solid #E4DDD1"}}>
+              <div style={{fontSize:12,color:"#7A9090",marginBottom:10,fontWeight:500}}>📅 {fmtFull(toDay())}</div>
+              <div style={{display:"flex",gap:8}}>
+                <input ref={inputRef} className="inp" value={input}
+                  onChange={e=>setInput(e.target.value)}
+                  onKeyDown={e=>e.key==="Enter"&&doSearch()}
+                  placeholder="한글 단어 입력 (예: 민주주의)"
+                  style={{flex:1}}/>
+                <button className="btn" onClick={doSearch} disabled={busy||!input.trim()}>
+                  {busy?<span className="sp">⟳</span>:"검색"}
+                </button>
+              </div>
+            </div>
+
+            {todayList.length>0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14,alignItems:"center"}}>
+                <span style={{fontSize:12,color:"#7A9090"}}>오늘: </span>
+                {todayList.map((w,i)=>(
+                  <button key={i} className="chip" onClick={()=>setCur(w)}
+                    style={{background:current?.word===w.word?"#2A7464":"#E8F4F1",color:current?.word===w.word?"white":"#2A7464"}}>
+                    {w.word}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            {busy&&<Skel/>}
+            {!busy&&current&&<Card data={current}/>}
+            {!busy&&!current&&(
+              <div style={{textAlign:"center",padding:"50px 20px",color:"#7A9090"}}>
+                <div style={{fontSize:48,marginBottom:12}}>✏️</div>
+                <p style={{fontSize:15}}>단어를 검색하면 한자와 영어 정보가 나타나요</p>
+                {allCount>0&&<p style={{fontSize:13,marginTop:8}}>지금까지 <strong style={{color:"#2A7464"}}>{allCount}개</strong> 단어를 모았어요 🎉</p>}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ARCHIVE */}
+        {tab==="archive"&&(
+          <div className="fu">
+            {dates.length===0?(
+              <div style={{textAlign:"center",padding:"50px 20px",color:"#7A9090"}}>
+                <div style={{fontSize:44,marginBottom:10}}>📚</div>
+                <p>아직 단어가 없어요!</p>
+              </div>
+            ):(
+              <>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+                  {dates.map(d=>(
+                    <button key={d} onClick={()=>setSD(d)}
+                      style={{padding:"7px 13px",borderRadius:20,border:"none",cursor:"pointer",fontSize:12,
+                        background:selDate===d?"#2A7464":"white",color:selDate===d?"white":"#486060",
+                        fontWeight:selDate===d?600:400,boxShadow:"0 1px 5px rgba(0,0,0,.07)"}}>
+                      {fmtShort(d)} ({archive[d]?.length})
+                    </button>
+                  ))}
+                </div>
+                {selDate&&archive[selDate]?.map((w,i)=>(
+                  <div key={i} style={{marginBottom:16}}><Card data={w}/></div>
+                ))}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* QUIZ */}
+        {tab==="quiz"&&(
+          <div className="fu">
+            {!qOn
+              ?<QSetup qType={qType} setQT={setQT} onStart={startQuiz} total={allCount}/>
+              :qDone
+              ?<QResult score={score} total={quiz.length} quiz={quiz} ans={ans} onRetry={()=>{setQOn(false);setErr("");}}/>
+              :<QQ q={quiz[qIdx]} idx={qIdx} total={quiz.length} selAns={selAns} onAnswer={answerQ}/>
+            }
+          </div>
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+/* ── CARD ── */
+function Card({data}) {
+  return (
+    <div>
+      <div style={{background:"white",borderRadius:14,padding:"13px 16px",border:"1px solid #E4DDD1",marginBottom:10,boxShadow:"0 1px 6px rgba(0,0,0,.04)"}}>
+        <span style={{fontFamily:"'Noto Serif KR',serif",fontSize:23,fontWeight:700,color:"#1B2B2A"}}>{data.word}</span>
+        {data.hanja?.hasHanja&&(
+          <div style={{fontSize:13,color:"#2A7464",fontFamily:"'Noto Serif KR',serif",marginTop:4}}>
+            {data.hanja.characters} ({data.hanja.reading}) · {data.hanja.meaning}
+          </div>
+        )}
+      </div>
+      <HPanel h={data.hanja}/>
+      <div style={{height:10}}/>
+      <EPanel e={data.english}/>
+    </div>
+  );
+}
+
+function HPanel({h}) {
+  return (
+    <div style={{background:"#E8F4F1",borderRadius:12,padding:14,border:"1px solid #C4E2DC"}}>
+      <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:10}}>
+        <span>🀄</span>
+        <span style={{fontSize:12,fontWeight:700,color:"#2A7464"}}>한자 漢字</span>
+      </div>
+      {!h?<p style={{fontSize:13,color:"#486060"}}>정보 없음</p>
+       :!h.hasHanja?<p style={{fontSize:13,color:"#486060",lineHeight:1.75}}>순우리말 또는 외래어로<br/>한자 표기가 없는 단어예요.</p>
+       :(
+        <>
+          <div style={{fontFamily:"'Noto Serif KR',serif",fontWeight:700,fontSize:28,color:"#2A7464",letterSpacing:6,marginBottom:10}}>{h.characters}</div>
+          {(h.components||[]).map((c,i)=>(
+            <div key={i} style={{background:"white",borderRadius:9,padding:"10px 12px",marginBottom:8,border:"1px solid #C4E2DC"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                <span style={{fontSize:22,fontFamily:"'Noto Serif KR',serif",fontWeight:700,color:"#2A7464"}}>{c.char}</span>
+                <span style={{fontSize:12,color:"#2A7464",fontWeight:600}}>({c.reading})</span>
+                <span style={{fontSize:12,color:"#486060"}}>— {c.charMeaning}</span>
+              </div>
+              <div style={{fontSize:11,color:"#7A9090",marginBottom:4}}>부수: {c.radical} {c.radicalName}</div>
+              <p style={{fontSize:13,color:"#1B2B2A",lineHeight:1.75}}>{c.explanation}</p>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+function EPanel({e}) {
+  if(!e) return <div style={{background:"#FDF3E0",borderRadius:12,padding:14,border:"1px solid #F5D98A"}}><p style={{fontSize:13,color:"#486060"}}>정보 없음</p></div>;
+  return (
+    <div style={{background:"#FDF3E0",borderRadius:12,padding:14,border:"1px solid #F5D98A"}}>
+      <div style={{display:"flex",alignItems:"center",gap:5,marginBottom:10}}>
+        <span>🔤</span>
+        <span style={{fontSize:12,fontWeight:700,color:"#B07010"}}>영어 English</span>
+      </div>
+      <div style={{marginBottom:10}}>
+        <span style={{fontFamily:"Georgia,serif",fontSize:19,color:"#B07010",fontWeight:700}}>{e.word}</span>
+        {e.partOfSpeech&&<span style={{fontSize:11,color:"#7A9090",marginLeft:7}}>{e.partOfSpeech}</span>}
+        {e.pronunciation&&<div style={{fontSize:12,color:"#7A9090",marginTop:2}}>{e.pronunciation}</div>}
+        <p style={{fontSize:13,color:"#1B2B2A",marginTop:5,lineHeight:1.7}}>{e.definition}</p>
+      </div>
+      {e.synonyms?.length>0&&<WRow label="동의어" words={e.synonyms.slice(0,3)} fg="#2A7464" bg="#E8F4F1"/>}
+      {e.antonyms?.length>0&&<WRow label="반의어" words={e.antonyms.slice(0,2)} fg="#BF3B3B" bg="#FEF0F0"/>}
+      {e.relatedWords?.length>0&&(
+        <div style={{marginTop:8}}>
+          <span style={{fontSize:11,color:"#7A9090",fontWeight:600}}>관련 단어</span>
+          {e.relatedWords.slice(0,3).map((r,i)=>(
+            <div key={i} style={{fontSize:12,color:"#1B2B2A",marginTop:4}}>
+              <strong style={{color:"#B07010"}}>{r.word}</strong> — {r.meaning}
+            </div>
+          ))}
+        </div>
+      )}
+      {e.exampleSentence&&(
+        <div style={{background:"white",borderRadius:9,padding:"10px 12px",border:"1px solid #F5D98A",marginTop:10}}>
+          <p style={{fontSize:12,fontStyle:"italic",color:"#1B2B2A",lineHeight:1.75}}>{e.exampleSentence}</p>
+          <p style={{fontSize:11,color:"#7A9090",marginTop:3}}>{e.exampleTranslation}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WRow({label,words,fg,bg}) {
+  return (
+    <div style={{marginTop:5,marginBottom:3}}>
+      <span style={{fontSize:11,color:"#7A9090",fontWeight:600}}>{label} </span>
+      {words.map((w,i)=>(
+        <span key={i} style={{fontSize:12,color:fg,background:bg,padding:"2px 9px",borderRadius:10,marginRight:4,fontWeight:500,display:"inline-block",marginTop:3,border:`1px solid ${fg}25`}}>{w}</span>
+      ))}
+    </div>
+  );
+}
+
+function Skel() {
+  const B=(w,h=12,mb=8)=><div className="sk" style={{width:w,height:h,marginBottom:mb}}/>;
+  return (
+    <div>
+      <div style={{background:"white",borderRadius:14,padding:"13px 16px",border:"1px solid #E4DDD1",marginBottom:10}}>{B("40%",20,0)}</div>
+      {["#E8F4F1","#FDF3E0"].map((bg,i)=>(
+        <div key={i} style={{background:bg,borderRadius:12,padding:14,border:"1px solid #E4DDD1",marginBottom:i===0?10:0}}>
+          {B("30%",12,12)}{B("45%",26,10)}
+          <div style={{background:"white",borderRadius:9,padding:"10px 12px",marginBottom:8}}>{B("65%",11,5)}{B("80%",11,5)}{B("55%",11,0)}</div>
+          <div style={{background:"white",borderRadius:9,padding:"10px 12px"}}>{B("70%",11,5)}{B("50%",11,0)}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ── QUIZ ── */
+function QSetup({qType,setQT,onStart,total}) {
+  return (
+    <div style={{maxWidth:400,margin:"0 auto",background:"white",borderRadius:18,padding:"26px 20px",border:"1px solid #E4DDD1",boxShadow:"0 3px 16px rgba(0,0,0,.07)",textAlign:"center"}}>
+      <div style={{fontSize:46,marginBottom:10}}>🎯</div>
+      <h2 style={{fontFamily:"'Noto Serif KR',serif",fontSize:20,color:"#1B2B2A",marginBottom:6,fontWeight:700}}>단어 퀴즈</h2>
+      <p style={{color:"#486060",fontSize:14,lineHeight:1.7,marginBottom:20}}>
+        저장된 <strong style={{color:"#2A7464"}}>{total}개</strong> 단어로 4지선다!<br/>최대 10문제 출제돼요.
+      </p>
+      <p style={{fontSize:12,fontWeight:600,color:"#7A9090",marginBottom:10}}>문제 유형</p>
+      <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginBottom:22}}>
+        {[["both","🀄 한자 + 🔤 영어"],["hanja","🀄 한자만"],["english","🔤 영어만"]].map(([id,lbl])=>(
+          <button key={id} onClick={()=>setQT(id)}
+            style={{padding:"9px 13px",borderRadius:9,cursor:"pointer",fontSize:13,
+              border:`2px solid ${qType===id?"#2A7464":"#E4DDD1"}`,
+              background:qType===id?"#E8F4F1":"transparent",
+              color:qType===id?"#2A7464":"#486060",fontWeight:qType===id?600:400}}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+      <button className="btn" onClick={onStart} style={{width:"100%",padding:"14px",fontSize:15,borderRadius:12}}>
+        퀴즈 시작 →
+      </button>
+    </div>
+  );
+}
+
+function QQ({q,idx,total,selAns,onAnswer}) {
+  return (
+    <div>
+      <div style={{marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:13,color:"#7A9090",marginBottom:7}}>
+          <span>문제 {idx+1} / {total}</span>
+          <span style={{color:q.type==="hanja"?"#2A7464":"#B07010",fontWeight:600}}>
+            {q.type==="hanja"?"🀄 한자":"🔤 영어"}
+          </span>
+        </div>
+        <div style={{height:6,background:"#E4DDD1",borderRadius:3}}>
+          <div style={{height:"100%",borderRadius:3,background:q.type==="hanja"?"#2A7464":"#B07010",
+            width:`${(idx/total)*100}%`,transition:"width .4s"}}/>
+        </div>
+      </div>
+      <div className="fi" style={{background:"white",borderRadius:16,padding:"20px 16px",border:"1px solid #E4DDD1",boxShadow:"0 2px 10px rgba(0,0,0,.05)"}}>
+        <p style={{fontSize:18,fontWeight:600,fontFamily:"'Noto Serif KR',serif",color:"#1B2B2A",marginBottom:20,lineHeight:1.6}}>{q.q}</p>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          {q.options.map((opt,i)=>{
+            let cls="qopt";
+            if(selAns!==null){cls+=" off";if(opt===q.correct)cls+=" ok pop";else if(opt===selAns)cls+=" ng";}
+            return <button key={i} className={cls} onClick={()=>onAnswer(opt)}>{opt}</button>;
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function QResult({score,total,quiz,ans,onRetry}) {
+  const pct=Math.round(score/total*100);
+  const [emoji,msg]=pct>=90?["🏆","완벽해요!"]:pct>=70?["⭐","잘했어요!"]:pct>=50?["💪","조금만 더!"]:["📚","계속 도전!"];
+  return (
+    <div className="fu">
+      <div style={{background:"white",borderRadius:18,padding:"26px 20px",border:"1px solid #E4DDD1",textAlign:"center",marginBottom:16}}>
+        <div style={{fontSize:46,marginBottom:8}}>{emoji}</div>
+        <div style={{fontSize:40,fontWeight:700,color:"#1B2B2A"}}>
+          {score}<span style={{fontSize:20,color:"#7A9090",fontWeight:400}}>/{total}</span>
+        </div>
+        <p style={{color:"#2A7464",fontWeight:600,fontSize:17,marginTop:5}}>{msg}</p>
+        <p style={{color:"#7A9090",fontSize:13,marginTop:3}}>정답률 {pct}%</p>
+        <div style={{margin:"14px 0 18px",height:8,background:"#E4DDD1",borderRadius:4}}>
+          <div style={{height:"100%",borderRadius:4,background:"#2A7464",width:`${pct}%`,transition:"width 1s"}}/>
+        </div>
+        <button className="btn" onClick={onRetry} style={{padding:"12px 26px",borderRadius:10}}>다시 설정</button>
+      </div>
+      <div style={{fontSize:13,fontWeight:600,color:"#7A9090",marginBottom:10}}>📋 복습</div>
+      {quiz.map((q,i)=>(
+        <div key={i} style={{background:"white",borderRadius:10,padding:"11px 14px",marginBottom:8,
+          border:`1px solid ${ans[i]?.ok?"#B3F0CF":"#FECACA"}`,display:"flex",gap:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:16}}>{ans[i]?.ok?"✅":"❌"}</span>
+          <div>
+            <p style={{fontSize:13,color:"#1B2B2A",fontFamily:"'Noto Serif KR',serif",lineHeight:1.5}}>{q.q}</p>
+            {!ans[i]?.ok&&(
+              <p style={{fontSize:12,marginTop:4}}>
+                <span style={{color:"#2D7A50"}}>정답: <strong>{q.correct}</strong></span>
+                {ans[i]?.opt&&<span style={{color:"#BF3B3B",marginLeft:8}}>내 답: {ans[i].opt}</span>}
+              </p>
+            )}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
